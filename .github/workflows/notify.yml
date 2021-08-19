@@ -1,0 +1,29 @@
+name: aws-cost-line-notify
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/notify.yml"
+      - "main.go"
+  schedule:
+    - cron: "0 15 * * *"
+
+jobs:
+  main:
+    runs-on: ubuntu-20.04
+    steps:
+      - name: install go
+        uses: actions/setup-go@v2
+        with:
+          go-version: ^1.16
+        id: go
+      - name: check out
+        uses: actions/checkout@v2
+      - name: install
+        run: go install .
+      - name: exec
+        run: aws-cost-line-notify
+        env:
+          AWS_COST_LINE_NOTIFY_TOKEN: ${{ secrets.AWS_COST_LINE_NOTIFY_TOKEN }}
