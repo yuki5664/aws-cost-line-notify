@@ -1,7 +1,8 @@
 package main
 
 import (
-	"fmt"
+	"bytes"
+	"html/template"
 	"log"
 	"net/http"
 	"net/url"
@@ -25,6 +26,19 @@ type TimeHelper struct {
 	Now      time.Time
 }
 
+type Tmpl struct {
+	Start string
+	End   string
+	Cost  string
+	Unit  string
+}
+
+const tmplStr = `
+
+{{.Start}} - {{.End}}
+{{.Cost}} {{ .Unit }}
+`
+
 func init() {
 	if accessToken = os.Getenv("AWS_COST_LINE_NOTIFY_TOKEN"); accessToken == "" {
 		log.Fatalf("AWS_COST_LINE_NOTIFY_TOKEN is not defined")
@@ -41,21 +55,49 @@ func init() {
 }
 
 func main() {
-	now := timeh.Now.Format("2006-01-02")
-	cost, err := getCostPeriod("MONTHLY", timeh.GetFirstOfMonth(), now)
+	cost, err := getCostDate()
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(cost.ResultsByTime[0].Total)
-	cost, err = getCostPeriod("DAILY", timeh.GetYesterday(), now)
+	msg, err := getCostMessage(cost)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(cost.ResultsByTime[0].Total)
-	err = notify(cost.String())
+	cost, err = getCostMonth()
 	if err != nil {
 		log.Fatal(err)
 	}
+	nmsg, err := getCostMessage(cost)
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = notify(msg + nmsg)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func getCostMessage(cost *costexplorer.GetCostAndUsageOutput) (string, error) {
+	var tmplArg Tmpl
+	var tmplWriter bytes.Buffer
+	data := cost.ResultsByTime[0]
+	tmplArg.Start = *data.TimePeriod.Start
+	tmplArg.End = *data.TimePeriod.End
+	tmplArg.Cost = *data.Total["UnblendedCost"].Amount
+	tmplArg.Unit = *data.Total["UnblendedCost"].Unit
+	tmpl := template.Must(template.New("cost-notify").Parse(tmplStr))
+	if err := tmpl.Execute(&tmplWriter, tmplArg); err != nil {
+		return "", err
+	}
+	return tmplWriter.String(), nil
+}
+
+func getCostDate() (*costexplorer.GetCostAndUsageOutput, error) {
+	return getCostPeriod("DAILY", timeh.GetYesterday(), timeh.Now.Format("2006-01-02"))
+}
+
+func getCostMonth() (*costexplorer.GetCostAndUsageOutput, error) {
+	return getCostPeriod("MONTHLY", timeh.GetFirstOfMonth(), timeh.Now.Format("2006-01-02"))
 }
 
 func notify(message string) error {
@@ -70,13 +112,10 @@ func notify(message string) error {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	_, err = client.Do(req)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return nil
+	return err
 }
 
-func getCostPeriod(granularity string, start string, end string) (res *costexplorer.GetCostAndUsageOutput, err error) {
+func getCostPeriod(granularity string, start string, end string) (*costexplorer.GetCostAndUsageOutput, error) {
 	svc := costexplorer.New(session.Must(session.NewSession()))
 	metric := "UnblendedCost"
 	timePeriod := costexplorer.DateInterval{
@@ -87,8 +126,7 @@ func getCostPeriod(granularity string, start string, end string) (res *costexplo
 	input.Granularity = aws.String(granularity)
 	input.Metrics = []*string{&metric}
 	input.TimePeriod = &timePeriod
-	res, err = svc.GetCostAndUsage(&input)
-	return res, err
+	return svc.GetCostAndUsage(&input)
 }
 
 func newTimeHelper(locationName string) (*TimeHelper, error) {
